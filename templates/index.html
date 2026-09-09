@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Intraday Simulator</title>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<style>
+:root{
+  --bg:#0e1117; --panel:#161b22; --border:#30363d; --text:#e6edf3;
+  --muted:#8b949e; --accent:#58a6ff; --green:#2ea043; --red:#f85149;
+  --radius:10px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,sans-serif}
+a{color:var(--accent)}
+.wrap{max-width:1280px;margin:0 auto;padding:16px 20px}
+h1{font-size:18px;margin:0 0 4px}
+.sub{color:var(--muted);font-size:12px;margin-bottom:12px}
+.row{display:flex;gap:12px;flex-wrap:wrap}
+.col{flex:1;min-width:280px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:12px}
+.card h3{margin:0 0 8px;font-size:13px;letter-spacing:.02em;text-transform:uppercase;color:var(--muted)}
+label{font-size:12px;color:var(--muted);display:block;margin:6px 0 4px}
+select,input,button{width:100%;background:#0d1117;color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 10px;font:13px system-ui}
+select{cursor:pointer}
+button{background:var(--accent);color:#0b1220;border:none;cursor:pointer;font-weight:600}
+button:disabled{opacity:.6;cursor:not-allowed}
+button.secondary{background:transparent;color:var(--text);border:1px solid var(--border)}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.kpi{background:#0d1117;border:1px solid var(--border);border-radius:8px;padding:8px 10px}
+.kpi .v{font-size:18px;font-weight:700}
+.kpi .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.pos{color:var(--green)} .neg{color:var(--red)}
+.table{width:100%;border-collapse:collapse;font-size:12px}
+.table th,.table td{border-bottom:1px solid var(--border);padding:6px 8px;text-align:left;white-space:nowrap}
+.table th{color:var(--muted);font-weight:600}
+.logic{white-space:pre-wrap;background:#0d1117;border:1px solid var(--border);border-radius:8px;padding:10px;font-size:12.5px;line-height:1.6}
+.pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#0d1117;border:1px solid var(--border);font-size:11px;color:var(--muted);margin-right:6px}
+#chart{height:520px}
+#equity{height:260px}
+#vol{height:160px}
+.small{font-size:11px;color:var(--muted)}
+hr{border:none;border-top:1px solid var(--border);margin:12px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Intraday Simulator — 5-min bars • buy/sell trace • volume • P&amp;L</h1>
+  <div class="sub">Switch strategies, compare logic. Signals execute at the <b>next bar open</b> (no look-ahead). Commission + slippage apply on every flip.</div>
+
+  <div class="row">
+    <div class="card" style="flex:0 0 320px">
+      <h3>Controls</h3>
+      <label>Stock / source</label>
+      <select id="stock"></select>
+
+      <label>Strategy</label>
+      <select id="strategy"></select>
+
+      <div class="row" style="gap:8px">
+        <div style="flex:1">
+          <label>Bars</label>
+          <select id="bars">
+            <option value="750">750 (~10d)</option>
+            <option value="1500" selected>1500 (~20d)</option>
+            <option value="3000">3000 (~40d)</option>
+            <option value="4500">4500 (~60d)</option>
+          </select>
+        </div>
+        <div style="flex:1">
+          <label>Seed (synthetic)</label>
+          <input id="seed" type="number" value="42">
+        </div>
+      </div>
+
+      <div id="paramBox" style="margin-top:8px"></div>
+
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button id="runBtn">Run</button>
+        <button id="shuffleBtn" class="secondary" title="New synthetic path">Shuffle</button>
+      </div>
+      <div class="small" style="margin-top:8px" id="meta"></div>
+    </div>
+
+    <div class="col">
+      <div class="card">
+        <h3>KPIs</h3>
+        <div class="kpis" id="kpis"></div>
+        <div style="margin-top:8px" id="kpi2" class="small"></div>
+      </div>
+      <div class="card" style="margin-top:12px">
+        <h3>Strategy logic</h3>
+        <div id="logic" class="logic">—</div>
+        <div id="params" style="margin-top:8px"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <h3>Price — candlesticks · indicators · buy/sell markers · volume</h3>
+    <div id="chart"></div>
+    <div id="vol"></div>
+  </div>
+
+  <div class="row" style="margin-top:12px">
+    <div class="col card">
+      <h3>Equity curve</h3>
+      <div id="equity"></div>
+    </div>
+    <div class="col card" style="flex:0 0 520px">
+      <h3>Trades</h3>
+      <div style="max-height:320px;overflow:auto">
+        <table class="table" id="trades"><thead><tr>
+          <th>Time</th><th>Side</th><th>Price</th><th>Entry</th><th>P&L</th><th>%</th><th>Bars</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <h3>Quick comparison — run every strategy on the current data</h3>
+    <button id="compareBtn" class="secondary" style="max-width:220px">Compare all 9</button>
+    <div style="margin-top:10px;overflow:auto">
+      <table class="table" id="compare"><thead><tr>
+        <th>Strategy</th><th>Total%</th><th>CAGR%</th><th>Sharpe</th><th>MDD%</th><th>Win%</th><th>Trades</th><th>PF</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const stockSel = $('#stock'), stratSel = $('#strategy'), barsSel = $('#bars'), seedInp = $('#seed');
+const runBtn = $('#runBtn'), shuffleBtn = $('#shuffleBtn'), compareBtn = $('#compareBtn');
+const metaEl = $('#meta'), logicEl = $('#logic'), paramsEl = $('#params'), paramBox = $('#paramBox');
+
+let lastResult = null;
+let strategyMeta = [];
+
+function fmt(n,d=2){ if(n==null||isNaN(n)) return '—'; const s=n>=0?'+':''; return s+n.toFixed(d); }
+
+async function loadMeta(){
+  const [stocks, strats] = await Promise.all([
+    fetch('/api/stocks').then(r=>r.json()),
+    fetch('/api/strategies').then(r=>r.json()),
+  ]);
+  strategyMeta = strats;
+  stockSel.innerHTML = stocks.map(s=>`<option value="${s.id}">${s.label}</option>`).join('');
+  stratSel.innerHTML = strats.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  stratSel.value = 'sma';
+  renderParamBox();
+  stratSel.addEventListener('change', ()=>{ renderParamBox(); });
+}
+
+function renderParamBox(){
+  const id = stratSel.value;
+  const m = strategyMeta.find(x=>x.id===id);
+  if(!m || !m.params || !Object.keys(m.params).length){ paramBox.innerHTML=''; return; }
+  paramBox.innerHTML = Object.entries(m.params).map(([k,v])=>`
+    <label>${k}</label><input data-param="${k}" type="number" step="any" value="${v}">
+  `).join('');
+}
+
+function collectParams(){
+  const out={};
+  paramBox.querySelectorAll('[data-param]').forEach(inp=>{
+    const k=inp.getAttribute('data-param'); const v=parseFloat(inp.value);
+    if(!isNaN(v)) out[k]=v;
+  });
+  return out;
+}
+
+function kpiCard(k,v,cls){
+  return `<div class="kpi"><div class="k">${k}</div><div class="v ${cls||''}">${v}</div></div>`;
+}
+
+function renderKPIs(m){
+  const c = m.total_ret_pct>=0?'pos':'neg';
+  const bh = m.bh_ret_pct>=0?'pos':'neg';
+  $('#kpis').innerHTML =
+    kpiCard('Total return', fmt(m.total_ret_pct)+ '%', c) +
+    kpiCard('Buy & Hold', fmt(m.bh_ret_pct)+ '%', bh) +
+    kpiCard('CAGR', fmt(m.cagr_pct)+ '%', m.cagr_pct>=0?'pos':'neg') +
+    kpiCard('Sharpe', m.sharpe.toFixed(2), m.sharpe>0?'pos':'neg') +
+    kpiCard('Max DD', m.mdd_pct.toFixed(2)+ '%', 'neg') +
+    kpiCard('Exposure', m.exposure_pct.toFixed(1)+ '%', '') +
+    kpiCard('Win rate', m.win_rate_pct.toFixed(1)+ '%', m.win_rate_pct>=50?'pos':'neg') +
+    kpiCard('Profit factor', (m.profit_factor||0).toFixed(2), m.profit_factor>1?'pos':'neg');
+  $('#kpi2').innerHTML =
+    `Round-trips: <b>${m.round_trips}</b> &nbsp;·&nbsp; Flips: <b>${m.num_flips}</b> &nbsp;·&nbsp; `
+    + `Avg win <span class="pos">${fmt(m.avg_win_pct)}%</span> &nbsp;·&nbsp; Avg loss <span class="neg">${fmt(m.avg_loss_pct)}%</span> `
+    + `&nbsp;·&nbsp; Best ${fmt(m.best_pct)}% &nbsp;·&nbsp; Worst ${fmt(m.worst_pct)}% &nbsp;·&nbsp; Vol ${m.vol_pct.toFixed(1)}%`;
+}
+
+function renderTrades(trades){
+  const tb = $('#trades tbody');
+  if(!trades.length){ tb.innerHTML='<tr><td colspan="7" class="small">No trades</td></tr>'; return; }
+  tb.innerHTML = trades.map(t=>{
+    const sideColor = t.side.startsWith('BUY')?'pos':'neg';
+    const pnlCls = (t.pnl==null)?'':(t.pnl>=0?'pos':'neg');
+    return `<tr>
+      <td>${t.t.replace('T',' ')}</td>
+      <td class="${sideColor}"><b>${t.side}</b></td>
+      <td>${t.price?.toFixed(2)??'—'}</td>
+      <td>${t.entry!=null?t.entry.toFixed(2):'—'}</td>
+      <td class="${pnlCls}">${t.pnl!=null?t.pnl.toFixed(2):'—'}</td>
+      <td class="${pnlCls}">${t.pnl_pct!=null?fmt(t.pnl_pct)+'%':'—'}</td>
+      <td>${t.bars_held??'—'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function drawCharts(payload){
+  const ohlc = payload.ohlc;
+  const x = ohlc.map(d=>d.t);
+  const open = ohlc.map(d=>d.o), high=ohlc.map(d=>d.h), low=ohlc.map(d=>d.l), close=ohlc.map(d=>d.c);
+  const vol = ohlc.map(d=>d.v);
+
+  // Map trades to x positions for markers
+  const tmap = new Map(ohlc.map((d,i)=>[d.t,i]));
+  const buys = payload.trades.filter(t=>t.side==='BUY');
+  const sells = payload.trades.filter(t=>t.side.startsWith('SELL'));
+  const buyX = buys.map(t=>t.t), buyY = buys.map(t=>t.price);
+  const sellX = sells.map(t=>t.t), sellY = sells.map(t=>t.price);
+
+  const traces = [
+    {type:'candlestick', x, open, high, low, close, name:'Price',
+     increasing:{line:{color:'#2ea043'}}, decreasing:{line:{color:'#f85149'}}},
+  ];
+
+  // Indicators
+  const indColors = {SMA:'#e67e22', EMA:'#3498db', MACD:'#9b59b6', MACD_signal:'#e67e22', BB_mid:'#8b949e', BB_up:'#e74c3c', BB_low:'#2ecc71', RSI:'#2ecc71', DON_up:'#f39c12', DON_low:'#f39c12', Z:'#8b949e', mom:'#1abc9c'};
+  for(const [name, vals] of Object.entries(payload.indicators||{})){
+    const xs = vals.map(v=>v.t), ys = vals.map(v=>v.v);
+    let col = '#8b949e';
+    for(const k of Object.keys(indColors)) if(name.startsWith(k)) col=indColors[k];
+    traces.push({type:'scatter', mode:'lines', x:xs, y:ys, name, line:{color:col, width:1.2}, opacity:0.9});
+  }
+
+  // Position shading as shapes (we use filled scatter for reliability)
+  // Buy/Sell markers
+  traces.push({type:'scatter', mode:'markers', x:buyX, y:buyY, name:'BUY',
+    marker:{symbol:'triangle-up', size:10, color:'#2ea043', line:{width:1,color:'#0e1117'}}, hovertemplate:'BUY %{y}<extra></extra>'});
+  traces.push({type:'scatter', mode:'markers', x:sellX, y:sellY, name:'SELL',
+    marker:{symbol:'triangle-down', size:10, color:'#f85149', line:{width:1,color:'#0e1117'}}, hovertemplate:'SELL %{y}<extra></extra>'});
+
+  const shapes = (payload.segments||[]).map(s=>({
+    type:'rect', xref:'x', yref:'paper', x0:s.from, x1:s.to, y0:0, y1:1,
+    fillcolor:'rgba(46,160,67,0.08)', line:{width:0}, layer:'below'
+  }));
+
+  const layout = {
+    paper_bgcolor:'#161b22', plot_bgcolor:'#0d1117',
+    font:{color:'#e6edf3', size:11},
+    margin:{l:56,r:12,t:12,b:28},
+    xaxis:{type:'date', gridcolor:'#21262d', rangeslider:{visible:false}},
+    yaxis:{gridcolor:'#21262d', title:'Price'},
+    legend:{orientation:'h', y:1.02, x:0, font:{size:10}},
+    shapes,
+    hovermode:'x unified',
+  };
+  Plotly.newPlot('chart', traces, layout, {responsive:true, displayModeBar:true});
+
+  // Volume
+  const volColors = ohlc.map((d,i)=>{
+    if(i===0) return '#30363d';
+    return d.c >= ohlc[i-1].c ? 'rgba(46,160,67,0.55)' : 'rgba(248,81,73,0.55)';
+  });
+  Plotly.newPlot('vol', [{type:'bar', x, y:vol, marker:{color:volColors}, name:'Volume'}],
+    {paper_bgcolor:'#161b22', plot_bgcolor:'#0d1117', font:{color:'#e6edf3', size:11},
+     margin:{l:56,r:12,t:6,b:28}, xaxis:{type:'date', gridcolor:'#21262d'}, yaxis:{gridcolor:'#21262d', title:'Vol'}, bargap:0.1},
+    {responsive:true, displayModeBar:false});
+
+  // Equity
+  const eqX = payload.equity.map(d=>d.t), eqY = payload.equity.map(d=>d.v);
+  const bhX = payload.bh_equity.map(d=>d.t), bhY = payload.bh_equity.map(d=>d.v);
+  Plotly.newPlot('equity', [
+    {type:'scatter', mode:'lines', x:eqX, y:eqY, name:'Strategy', line:{color:payload.strategy.color||'#58a6ff', width:1.6}},
+    {type:'scatter', mode:'lines', x:bhX, y:bhY, name:'Buy & Hold', line:{color:'#8b949e', width:1, dash:'dot'}},
+  ], {paper_bgcolor:'#161b22', plot_bgcolor:'#0d1117', font:{color:'#e6edf3', size:11},
+      margin:{l:56,r:12,t:6,b:28}, xaxis:{type:'date', gridcolor:'#21262d'}, yaxis:{gridcolor:'#21262d', title:'Equity (₹)'},
+      legend:{orientation:'h', y:1.02, x:0, font:{size:10}}, hovermode:'x unified'},
+    {responsive:true, displayModeBar:false});
+}
+
+async function run(){
+  runBtn.disabled=true; runBtn.textContent='Running…';
+  const body = {
+    strategy: stratSel.value,
+    symbol: stockSel.value,
+    source: stockSel.value==='__SYNTHETIC__'?'synthetic':'real',
+    bars: parseInt(barsSel.value,10),
+    seed: parseInt(seedInp.value,10)||42,
+    params: collectParams(),
+  };
+  try{
+    const r = await fetch('/api/run', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error||'failed');
+    lastResult=j;
+    renderKPIs(j.metrics);
+    // logic panel
+    logicEl.textContent = j.strategy.logic || '—';
+    paramsEl.innerHTML = `<span class="pill">${j.strategy.name}</span>` + Object.entries(j.strategy.params||{}).map(([k,v])=>`<span class="pill">${k}=${v}</span>`).join('') +
+      ` &nbsp;<span class="small">Bars ${j.meta.bars} · ${j.meta.from} → ${j.meta.to} · ${j.meta.source}/${j.meta.symbol}</span>`;
+    metaEl.textContent = `${j.meta.bars} bars · ${j.meta.from} → ${j.meta.to}`;
+    renderTrades(j.trades);
+    drawCharts(j);
+  }catch(e){
+    alert(e.message);
+  }finally{
+    runBtn.disabled=false; runBtn.textContent='Run';
+  }
+}
+
+async function compareAll(){
+  compareBtn.disabled=true; compareBtn.textContent='Running…';
+  const bodyBase = {
+    symbol: stockSel.value,
+    source: stockSel.value==='__SYNTHETIC__'?'synthetic':'real',
+    bars: parseInt(barsSel.value,10),
+    seed: parseInt(seedInp.value,10)||42,
+  };
+  const ids = strategyMeta.map(s=>s.id);
+  const rows=[];
+  for(const id of ids){
+    const r = await fetch('/api/run', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({...bodyBase, strategy:id})});
+    const j = await r.json();
+    rows.push(j.metrics);
+  }
+  rows.sort((a,b)=> b.total_ret_pct - a.total_ret_pct);
+  const tb = document.querySelector('#compare tbody');
+  tb.innerHTML = rows.map(m=>{
+    const strat = strategyMeta.find(s=>s.name===m.strategy)?.name || m.strategy || '—';
+    const cls = v=> v>=0?'pos':'neg';
+    return `<tr>
+      <td><b>${strat}</b></td>
+      <td class="${cls(m.total_ret_pct)}">${fmt(m.total_ret_pct)}%</td>
+      <td class="${cls(m.cagr_pct)}">${fmt(m.cagr_pct)}%</td>
+      <td>${m.sharpe.toFixed(2)}</td>
+      <td class="neg">${m.mdd_pct.toFixed(2)}%</td>
+      <td>${m.win_rate_pct.toFixed(1)}%</td>
+      <td>${m.round_trips}</td>
+      <td>${(m.profit_factor||0).toFixed(2)}</td>
+    </tr>`;
+  }).join('');
+  compareBtn.disabled=false; compareBtn.textContent='Compare all 9';
+}
+
+loadMeta().then(run);
+runBtn.addEventListener('click', run);
+shuffleBtn.addEventListener('click', ()=>{ seedInp.value = Math.floor(Math.random()*9999); run(); });
+compareBtn.addEventListener('click', compareAll);
+</script>
+</body>
+</html>
